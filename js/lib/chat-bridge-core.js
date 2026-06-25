@@ -101,6 +101,7 @@
 
   // ── Build DOM ─────────────────────────────────────────────────
   function buildPanel() {
+    if (document.getElementById("chat-bridge-root")) return;
     var root = document.createElement("div");
     root.className = "cb-root";
     root.id = "chat-bridge-root";
@@ -120,7 +121,7 @@
       '  <div class="cb-section-header" id="cb-api-header"><span class="cb-arrow" id="cb-api-arrow">▶</span> <span data-i18n="apiHeader">' + I.t("apiHeader") + '</span></div>\n'+
       '  <div class="cb-section-body" id="cb-api-body">\n'+
       '    <div class="cb-row"><label data-i18n="url">' + I.t("url") + '</label><input id="cb-url" data-i18n-placeholder="urlPlaceholder"></div>\n'+
-      '    <div class="cb-row"><label data-i18n="key">' + I.t("key") + '</label><input id="cb-key" type="password" data-i18n-placeholder="keyPlaceholder"><button class="cb-btn small" id="cb-key-toggle" style="width:24px;flex:none;">👁</button></div>\n'+
+      '    <div class="cb-row"><label data-i18n="key">' + I.t("key") + '</label><input id="cb-key" type="password" autocomplete="off" data-i18n-placeholder="keyPlaceholder"><button class="cb-btn small" id="cb-key-toggle" style="width:24px;flex:none;">👁</button></div>\n'+
       '    <div class="cb-row"><label data-i18n="model">' + I.t("model") + '</label><input id="cb-model" list="cb-model-list" data-i18n-placeholder="modelPlaceholder"><datalist id="cb-model-list"></datalist><button class="cb-btn small" id="cb-refresh-models" data-i18n-title="fetchModels" style="flex:none;">🔄</button></div>\n'+
       '    <div class="cb-row"><label data-i18n="prompt">' + I.t("prompt") + '</label><input id="cb-sys" data-i18n-placeholder="promptPlaceholder"></div>\n'+
       '    <div style="text-align:right;margin-top:4px"><button class="cb-btn primary" id="cb-save-config" data-i18n="saveConfig">' + I.t("saveConfig") + '</button></div>\n'+
@@ -404,10 +405,25 @@
     history.push({ role: "assistant", content: full });
   }
 
+  // ── Error badges helper ────────────────────────────────────────
+  function clearErrorBadges() {
+    var root = document.getElementById("chat-bridge-root");
+    if (!root) return;
+    var badges = root.querySelectorAll(".cb-err-badge, .cb-con-badge");
+    for (var i = 0; i < badges.length; i++) badges[i].textContent = "";
+  }
+
   // ── Clear / Save ──────────────────────────────────────────────
   function clearHistory() {
-    var $ = cacheAll(); history = []; imageStore = []; updateImageBar();
-    if ($.messages) $.messages.innerHTML = ""; addMsg("system", I.t("historyCleared"));
+    var $ = cacheAll();
+    history = [];
+    imageStore = [];
+    recentDialogError = "";
+    recentConsoleError = "";
+    clearErrorBadges();
+    updateImageBar();
+    if ($.messages) $.messages.innerHTML = "";
+    addMsg("system", I.t("historyCleared"));
   }
 
   function saveHistory() {
@@ -508,11 +524,26 @@
       if (window.app && window.app.ui && window.app.ui.dialog && window.app.ui.dialog.show) {
         var orig = window.app.ui.dialog.show.bind(window.app.ui.dialog);
         window.app.ui.dialog.show = function(html) {
-          var tmp = document.createElement("div"); tmp.innerHTML = html;
-          var txt = (tmp.textContent || tmp.innerText || html).trim();
-          if (txt && txt.length > 10 && !txt.includes("Queue prompt") && !txt.includes("Prompt executed")) {
-            recentDialogError = txt.slice(0, 4000);
-          }
+          try {
+            var tmp = document.createElement("div"); tmp.innerHTML = html;
+            var txt = (tmp.textContent || tmp.innerText || "").trim();
+            if (!txt) txt = String(html).trim();
+            console.log("[ChatBridge] Dialog intercepted (" + txt.length + " chars):", txt.slice(0, 150));
+            if (txt && txt.length > 10 && !txt.includes("Queue prompt") && !txt.includes("Prompt executed")) {
+              recentDialogError = txt.slice(0, 4000);
+              var $ = cacheAll();
+              if ($.ctxDialogError && $.ctxDialogError.parentNode) {
+                var badge = $.ctxDialogError.parentNode.querySelector(".cb-err-badge");
+                if (!badge) {
+                  badge = document.createElement("span");
+                  badge.className = "cb-err-badge";
+                  badge.style.cssText = "color:#ef4444;font-size:11px;margin-left:2px;";
+                  $.ctxDialogError.parentNode.appendChild(badge);
+                }
+                badge.textContent = " ⬤";
+              }
+            }
+          } catch(e) { console.warn("[ChatBridge] Dialog hook error:", e); }
           return orig(html);
         };
         console.log("[ChatBridge] Dialog error hook active.");
@@ -524,12 +555,27 @@
     var origError = console.error.bind(console);
     var origWarn = console.warn.bind(console);
 
+    function updateConsoleBadge() {
+      var $ = cacheAll();
+      if ($.ctxConsoleError && $.ctxConsoleError.parentNode) {
+        var badge = $.ctxConsoleError.parentNode.querySelector(".cb-con-badge");
+        if (!badge) {
+          badge = document.createElement("span");
+          badge.className = "cb-con-badge";
+          badge.style.cssText = "color:#f59e0b;font-size:11px;margin-left:2px;";
+          $.ctxConsoleError.parentNode.appendChild(badge);
+        }
+        badge.textContent = " ⬤";
+      }
+    }
+
     console.error = function() {
       var args = Array.prototype.slice.call(arguments);
       var msg = args.join(" ");
       if (msg.length > 10 && !/queue/i.test(msg) && !/prompt executed/i.test(msg)) {
         recentConsoleError = (recentConsoleError ? recentConsoleError + "\n" : "") + msg.slice(0, 1000);
         if (recentConsoleError.length > 4000) recentConsoleError = recentConsoleError.slice(-4000);
+        updateConsoleBadge();
       }
       return origError.apply(console, arguments);
     };
@@ -540,11 +586,38 @@
       if (msg.length > 10 && /missing|failed|error|exception/i.test(msg)) {
         recentConsoleError = (recentConsoleError ? recentConsoleError + "\n" : "") + msg.slice(0, 1000);
         if (recentConsoleError.length > 4000) recentConsoleError = recentConsoleError.slice(-4000);
+        updateConsoleBadge();
       }
       return origWarn.apply(console, arguments);
     };
 
     console.log("[ChatBridge] Console error hook active.");
+  }
+
+  function hookExecutionErrors() {
+    (function chk(){
+      if (window.app && window.app.api && typeof window.app.api.addEventListener === "function") {
+        window.app.api.addEventListener("execution_error", function(e) {
+          var detail = (e && e.detail) ? e.detail : e;
+          var msg = (detail.exception_message || detail.message || "") + "\n" + (detail.traceback || "");
+          if (!msg.trim() || msg.trim().length < 10) return;
+          console.log("[ChatBridge] Execution error intercepted (" + msg.length + " chars):", msg.slice(0, 200));
+          recentDialogError = msg.slice(0, 4000);
+          var $ = cacheAll();
+          if ($.ctxDialogError && $.ctxDialogError.parentNode) {
+            var badge = $.ctxDialogError.parentNode.querySelector(".cb-err-badge");
+            if (!badge) {
+              badge = document.createElement("span");
+              badge.className = "cb-err-badge";
+              badge.style.cssText = "color:#ef4444;font-size:11px;margin-left:2px;";
+              $.ctxDialogError.parentNode.appendChild(badge);
+            }
+            badge.textContent = " ⬤";
+          }
+        });
+        console.log("[ChatBridge] Execution error hook active.");
+      } else { setTimeout(chk, 500); }
+    })();
   }
 
   // ── Init ───────────────────────────────────────────────────────
@@ -618,6 +691,7 @@
 
     hookDialogErrors();
     hookConsoleErrors();
+    hookExecutionErrors();
 
     // ── Health check (fixed: uses /ping, zero network overhead) ──
     setInterval(function(){
