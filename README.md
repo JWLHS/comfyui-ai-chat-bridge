@@ -5,7 +5,7 @@
 
 无需额外服务器，无需 `.env` 文件。所有配置在面板中完成。
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+> **License:** [MIT](LICENSE) — 自由使用、修改、商用。
 
 ---
 
