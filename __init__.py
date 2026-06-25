@@ -58,6 +58,7 @@ from aiohttp import web
 from server import PromptServer
 
 from .chat_handler import ChatBridgeHandler
+from .error_collector import error_collector, install_execution_hook
 
 WEB_DIRECTORY = "js"
 
@@ -74,6 +75,7 @@ except Exception as e:
     traceback.print_exc()
 
 routes = PromptServer.instance.routes
+install_execution_hook()
 
 
 @routes.post("/api/chat-bridge/chat")
@@ -138,7 +140,86 @@ async def chat_bridge_ping(request: web.Request):
     return web.json_response({"ok": True})
 
 
+@routes.get("/api/chat-bridge/last-error")
+async def chat_bridge_last_error(request: web.Request):
+    """Return most recent execution error (consumed on read)."""
+    err = error_collector.get_error(consume=True)
+    return web.json_response({"error": err})
+
+
+@routes.post("/api/chat-bridge/validate-workflow")
+async def chat_bridge_validate_workflow(request: web.Request):
+    """Validate workflow: check missing node types and missing model files."""
+    try:
+        body = await request.json()
+        wf = body.get("workflow")
+        if not wf:
+            return web.json_response({"missing_nodes": [], "missing_models": []})
+
+        if isinstance(wf, str):
+            wf = json.loads(wf)
+
+        node_list = wf.get("nodes", [])
+
+        # ── Registered node types from ComfyUI itself ──
+        import nodes as comfy_nodes
+        known_types = set(comfy_nodes.NODE_CLASS_MAPPINGS.keys())
+
+        # ── Available model files on disk ──
+        from folder_paths import get_filename_list
+        model_folders = [
+            "checkpoints", "vae", "clip", "diffusion_models",
+            "text_encoders", "unet", "loras", "controlnet",
+            "upscale_models", "clip_vision", "gligen"
+        ]
+        known_models = set()
+        for folder in model_folders:
+            try:
+                for f in get_filename_list(folder):
+                    known_models.add(f)
+            except Exception:
+                pass
+
+        missing_nodes = []
+        missing_models = []
+
+        for node in node_list:
+            ntype = node.get("type", "")
+            ntitle = node.get("title", "") or ntype
+
+            # 1. Check node type exists
+            if ntype and ntype not in known_types:
+                label = "{} ({})".format(ntype, ntitle) if ntitle != ntype else ntype
+                missing_nodes.append(label)
+
+            # 2. Check model widget values
+            wvals = node.get("widgets_values", [])
+            inputs = node.get("inputs", [])
+            widx = 0
+            for inp in inputs:
+                if inp.get("widget") and inp.get("link") is None:
+                    wname = (inp.get("widget", {}) or {}).get("name", "")
+                    has_model_keyword = any(kw in wname.lower() for kw in
+                        ["name", "model", "unet", "vae", "clip", "checkpoint", "lora"])
+                    if wname and has_model_keyword and widx < len(wvals):
+                        val = str(wvals[widx]).strip()
+                        if val and not val.startswith("http"):
+                            is_model_ext = val.lower().endswith((".safetensors", ".ckpt", ".pt", ".pth", ".bin"))
+                            if is_model_ext and val not in known_models:
+                                missing_models.append("{} 缺少模型: {}".format(ntitle, val))
+                    widx += 1
+
+        return web.json_response({
+            "missing_nodes": missing_nodes,
+            "missing_models": missing_models
+        })
+    except Exception as e:
+        log.error("Validate workflow error: {}".format(e))
+        return web.json_response({"missing_nodes": [], "missing_models": [], "error": str(e)})
+
+
 log.info(
     "AI Chat Bridge plugin loaded "
-    "(routes: /api/chat-bridge/chat, /api/chat-bridge/chat/stream, /api/chat-bridge/models, /api/chat-bridge/ping)"
+    "(routes: /api/chat-bridge/chat, /api/chat-bridge/chat/stream, /api/chat-bridge/models, "
+    "/api/chat-bridge/ping, /api/chat-bridge/last-error, /api/chat-bridge/validate-workflow)"
 )

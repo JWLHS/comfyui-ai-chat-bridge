@@ -33,13 +33,6 @@
       fontSize: "字体大小",
       panelWidth: "面板宽度",
 
-      // Context section
-      ctxHeader: "上下文（每次发送附带）",
-      ctxWorkflow: "工作流 (完整JSON)",
-      ctxNodes: "已选中节点",
-      ctxDialogError: "弹窗报错 (红色弹窗)",
-      ctxConsoleError: "控制台报错 (缺失节点等)",
-
       // Params section
       paramsHeader: "推理参数",
       temp: "温度",
@@ -54,6 +47,13 @@
       canvasBtn: "📸 捕获画布",
       imgCount: "图片",
       imgClear: "✕ 清空",
+
+      // Context chips
+      contextHint: "点击选择要附带的内容，发送后自动复位",
+      workflowLabel: "工作流",
+      nodesLabel: "选中节点",
+      canvasErrorLabel: "画布错误",
+      runErrorLabel: "运行错误",
 
       // Input
       inputPlaceholder: "输入问题...",
@@ -80,11 +80,7 @@
 
       // Context summary
       sentContext: "📎 已发送:",
-      workflowLabel: "工作流",
-      nodesLabel: "选中节点",
       imagesLabel: "张图片",
-      dialogErrorLabel: "[弹窗报错]",
-      consoleErrorLabel: "[控制台报错]",
       errorLogLabel: "报错日志",
 
       // Code copy
@@ -121,12 +117,6 @@
       fontSize: "Font Size",
       panelWidth: "Panel Width",
 
-      ctxHeader: "Context (attach to each message)",
-      ctxWorkflow: "Workflow (full JSON)",
-      ctxNodes: "Selected nodes",
-      ctxDialogError: "Dialog errors (red popups)",
-      ctxConsoleError: "Console errors (missing nodes, etc.)",
-
       paramsHeader: "Parameters",
       temp: "Temp",
       maxTok: "Max Tok",
@@ -139,6 +129,12 @@
       canvasBtn: "📸 Canvas",
       imgCount: "images",
       imgClear: "✕ Clear",
+
+      contextHint: "Click to select context. Auto-reset after send",
+      workflowLabel: "Workflow",
+      nodesLabel: "Selected nodes",
+      canvasErrorLabel: "Canvas Error",
+      runErrorLabel: "Run Error",
 
       inputPlaceholder: "Ask about your workflow...",
       send: "Send",
@@ -162,11 +158,7 @@
       streamingOff: "Streaming: OFF",
 
       sentContext: "📎 Sent:",
-      workflowLabel: "workflow",
-      nodesLabel: "selected nodes",
       imagesLabel: "image(s)",
-      dialogErrorLabel: "[Dialog Error]",
-      consoleErrorLabel: "[Console Error]",
       errorLogLabel: "error log",
 
       copyCode: "Copy code",

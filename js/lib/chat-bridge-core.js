@@ -19,26 +19,23 @@
     base_url: "", api_key: "", model: "", system_prompt: "",
     temperature: 0.3, max_tokens: 4096, top_k: 40, top_p: 0.9,
     stream_enabled: true,
-    context_workflow: true, context_nodes: false,
-    context_dialog_error: true, context_console_error: true,
     font_size: 13, panel_width: 390, lang: "zh",
     panel_collapsed: false, api_collapsed: false,
-    params_collapsed: true, context_collapsed: true, appearance_collapsed: true,
+    params_collapsed: true, appearance_collapsed: true,
   };
 
   // ── State ──────────────────────────────────────────────────────
   var history = [];
-  var recentDialogError = "";
-  var recentConsoleError = "";
   var isLoading = false;
   var modelList = [];
   var imageStore = [];
 
+  // Context chip toggle states (auto-reset after send)
+  var ctxChips = { workflow: false, nodes: false, canvas_error: false, run_error: false };
+
   // ── Helpers ────────────────────────────────────────────────────
   function $(id) { return document.getElementById(id); }
-
   function scrollBottom(el) { el.scrollTop = el.scrollHeight; }
-
   function escapeHtml(s) { return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
   // ── Config ─────────────────────────────────────────────────────
@@ -51,7 +48,7 @@
         var merged = {}; for (var k in DEF) merged[k] = (s[k] !== undefined) ? s[k] : DEF[k];
         return merged;
       }
-    } catch(e) { /* ignore */ }
+    } catch(e) {}
     var copy = {}; for (var k in DEF) copy[k] = DEF[k];
     return copy;
   }
@@ -65,18 +62,11 @@
   // ── I18N text refresh ─────────────────────────────────────────
   function refreshUIText() {
     var nodes = document.querySelectorAll("#chat-bridge-root [data-i18n]");
-    for (var i = 0; i < nodes.length; i++) {
-      nodes[i].textContent = I.t(nodes[i].getAttribute("data-i18n"));
-    }
+    for (var i = 0; i < nodes.length; i++) nodes[i].textContent = I.t(nodes[i].getAttribute("data-i18n"));
     var inputs = document.querySelectorAll("#chat-bridge-root [data-i18n-placeholder]");
-    for (var j = 0; j < inputs.length; j++) {
-      inputs[j].placeholder = I.t(inputs[j].getAttribute("data-i18n-placeholder"));
-    }
+    for (var j = 0; j < inputs.length; j++) inputs[j].placeholder = I.t(inputs[j].getAttribute("data-i18n-placeholder"));
     var titles = document.querySelectorAll("#chat-bridge-root [data-i18n-title]");
-    for (var k = 0; k < titles.length; k++) {
-      titles[k].title = I.t(titles[k].getAttribute("data-i18n-title"));
-    }
-    var gb = $("cb-grabber"); if (gb) gb.textContent = I.t("grabberText");
+    for (var k = 0; k < titles.length; k++) titles[k].title = I.t(titles[k].getAttribute("data-i18n-title"));
     var st = $("cb-stream-toggle");
     if (st) st.textContent = st.classList.contains("active") ? "🌊" : "📄";
   }
@@ -84,12 +74,17 @@
   // ── Markdown ──────────────────────────────────────────────────
   function renderMarkdown(text) {
     var h = text;
-    h = h.replace(/<think>([\s\S]*?)<\/think>/g, function(m,c){
+    // Complete <think>...</think>
+    h = h.replace(/<think>([\s\S]*?)<\/think>/g, function(m, c) {
       var label = I.t("thinkingFold") + " (" + (c.length > 80 ? c.length + " " + I.t("chars") : I.t("short")) + ")";
       return '<details class="cb-thinking"><summary>💭 ' + label + '</summary><div>' + escapeHtml(c.trim()) + '</div></details>';
     });
-    h = h.replace(/<think>(?![\s\S]*?<\/think>)/g, "&lt;think&gt;");
-    h = h.replace(/```(\w*)\n?([\s\S]*?)```/g, function(m,lang,code){
+    // Unclosed <think> (streaming in progress) — keep open
+    h = h.replace(/<think>([\s\S]*?)$/g, function(m, c) {
+      return '<details class="cb-thinking" open><summary>💭 ' + I.t("thinkingFold") + '...' + '</summary><div>' + escapeHtml(c.trim()) + '</div></details>';
+    });
+    h = h.replace(/<\/think>/g, "");
+    h = h.replace(/```(\w*)\n?([\s\S]*?)```/g, function(m, lang, code) {
       return '<div class="cb-code-block"><button class="cb-copy-btn" title="' + I.t("copyCode") + '">📋</button><pre><code>' + escapeHtml(code.trim()) + '</code></pre></div>';
     });
     h = h.replace(/`([^`]+)`/g, "<code>$1</code>");
@@ -102,20 +97,27 @@
   // ── Build DOM ─────────────────────────────────────────────────
   function buildPanel() {
     if (document.getElementById("chat-bridge-root")) return;
+
+    // ── Ball ──
+    var ball = document.createElement("div");
+    ball.id = "cb-ball";
+    ball.className = "green";
+    ball.title = I.t("showPanel");
+    ball.innerHTML = '<span>🤖</span><span class="cb-ball-badge" id="cb-ball-badge"></span>';
+    document.body.appendChild(ball);
+
+    // ── Panel ──
     var root = document.createElement("div");
-    root.className = "cb-root";
+    root.className = "cb-root cb-hidden";
     root.id = "chat-bridge-root";
-
     root.insertAdjacentHTML("beforeend", CSS.get());
-
     root.insertAdjacentHTML("beforeend",
-      '<div class="cb-grabber" id="cb-grabber" data-i18n-title="showPanel">' + I.t("grabberText") + '</div>\n'+
       '<div class="cb-titlebar" id="cb-titlebar">\n'+
       '  <div class="cb-dot" id="cb-dot"></div>\n'+
       '  <span class="cb-title-text" data-i18n="title">' + I.t("title") + '</span>\n'+
       '  <button id="cb-lang-toggle" title="中/EN">🌐</button>\n'+
       '  <button id="cb-stream-toggle" class="active" data-i18n-title="streamOn">🌊</button>\n'+
-      '  <button id="cb-toggle" data-i18n-title="hidePanel">◀</button>\n'+
+      '  <button id="cb-close-panel" title="✕">✕</button>\n'+
       '</div>\n'+
       '<div class="cb-section">\n'+
       '  <div class="cb-section-header" id="cb-api-header"><span class="cb-arrow" id="cb-api-arrow">▶</span> <span data-i18n="apiHeader">' + I.t("apiHeader") + '</span></div>\n'+
@@ -128,12 +130,12 @@
       '  </div>\n'+
       '</div>\n'+
       '<div class="cb-section">\n'+
-      '  <div class="cb-section-header" id="cb-ctx-header"><span class="cb-arrow" id="cb-ctx-arrow">▶</span> <span data-i18n="ctxHeader">' + I.t("ctxHeader") + '</span></div>\n'+
-      '  <div class="cb-section-body" id="cb-ctx-body">\n'+
-      '    <label class="cb-check"><input type="checkbox" id="cb-ctx-workflow" checked> <span data-i18n="ctxWorkflow">' + I.t("ctxWorkflow") + '</span></label>\n'+
-      '    <label class="cb-check"><input type="checkbox" id="cb-ctx-nodes"> <span data-i18n="ctxNodes">' + I.t("ctxNodes") + '</span></label>\n'+
-      '    <label class="cb-check"><input type="checkbox" id="cb-ctx-dialog-error" checked> <span data-i18n="ctxDialogError">' + I.t("ctxDialogError") + '</span></label>\n'+
-      '    <label class="cb-check"><input type="checkbox" id="cb-ctx-console-error" checked> <span data-i18n="ctxConsoleError">' + I.t("ctxConsoleError") + '</span></label>\n'+
+      '  <div class="cb-section-header" id="cb-params-header"><span class="cb-arrow" id="cb-params-arrow">▶</span> <span data-i18n="paramsHeader">' + I.t("paramsHeader") + '</span></div>\n'+
+      '  <div class="cb-section-body" id="cb-params-body">\n'+
+      '    <div class="cb-row"><label data-i18n="temp">' + I.t("temp") + '</label><input type="range" id="cb-temp" min="0" max="2" step="0.1" value="0.3"><span class="cb-val" id="cb-temp-val">0.3</span></div>\n'+
+      '    <div class="cb-row"><label data-i18n="maxTok">' + I.t("maxTok") + '</label><input type="range" id="cb-maxtok" min="128" max="65536" step="256" value="4096"><span class="cb-val" id="cb-maxtok-val">4096</span></div>\n'+
+      '    <div class="cb-row"><label data-i18n="topK">' + I.t("topK") + '</label><input type="range" id="cb-topk" min="1" max="100" step="1" value="40"><span class="cb-val" id="cb-topk-val">40</span></div>\n'+
+      '    <div class="cb-row"><label data-i18n="topP">' + I.t("topP") + '</label><input type="range" id="cb-topp" min="0" max="1" step="0.05" value="0.9"><span class="cb-val" id="cb-topp-val">0.90</span></div>\n'+
       '  </div>\n'+
       '</div>\n'+
       '<div class="cb-section">\n'+
@@ -141,15 +143,6 @@
       '  <div class="cb-section-body" id="cb-appearance-body">\n'+
       '    <div class="cb-row"><label data-i18n="fontSize">' + I.t("fontSize") + '</label><input type="range" id="cb-font-size" min="10" max="18" step="1" value="13"><span class="cb-val" id="cb-font-size-val">13</span></div>\n'+
       '    <div class="cb-row"><label data-i18n="panelWidth">' + I.t("panelWidth") + '</label><input type="range" id="cb-panel-width" min="300" max="550" step="10" value="390"><span class="cb-val" id="cb-panel-width-val">390</span></div>\n'+
-      '  </div>\n'+
-      '</div>\n'+
-      '<div class="cb-section">\n'+
-      '  <div class="cb-section-header" id="cb-params-header"><span class="cb-arrow" id="cb-params-arrow">▶</span> <span data-i18n="paramsHeader">' + I.t("paramsHeader") + '</span></div>\n'+
-      '  <div class="cb-section-body" id="cb-params-body">\n'+
-      '    <div class="cb-row"><label data-i18n="temp">' + I.t("temp") + '</label><input type="range" id="cb-temp" min="0" max="2" step="0.1" value="0.3"><span class="cb-val" id="cb-temp-val">0.3</span></div>\n'+
-      '    <div class="cb-row"><label data-i18n="maxTok">' + I.t("maxTok") + '</label><input type="range" id="cb-maxtok" min="128" max="65536" step="256" value="4096"><span class="cb-val" id="cb-maxtok-val">4096</span></div>\n'+
-      '    <div class="cb-row"><label data-i18n="topK">' + I.t("topK") + '</label><input type="range" id="cb-topk" min="1" max="100" step="1" value="40"><span class="cb-val" id="cb-topk-val">40</span></div>\n'+
-      '    <div class="cb-row"><label data-i18n="topP">' + I.t("topP") + '</label><input type="range" id="cb-topp" min="0" max="1" step="0.05" value="0.9"><span class="cb-val" id="cb-topp-val">0.90</span></div>\n'+
       '  </div>\n'+
       '</div>\n'+
       '<div id="cb-toolbar">\n'+
@@ -165,28 +158,30 @@
       '  <button class="cb-btn small" id="cb-img-clear" data-i18n="imgClear">' + I.t("imgClear") + '</button>\n'+
       '</div>\n'+
       '<div id="cb-messages"></div>\n'+
+      '<div id="cb-ctx-bar" title="' + I.t("contextHint") + '">\n'+
+      '  <button class="cb-ctx-chip" id="cb-ctx-chip-workflow" data-ctx="workflow">📋 ' + I.t("workflowLabel") + '</button>\n'+
+      '  <button class="cb-ctx-chip" id="cb-ctx-chip-nodes" data-ctx="nodes">🔍 ' + I.t("nodesLabel") + '</button>\n'+
+      '  <button class="cb-ctx-chip" id="cb-ctx-chip-canvas-error" data-ctx="canvas_error">🎨 ' + I.t("canvasErrorLabel") + '</button>\n'+
+      '  <button class="cb-ctx-chip" id="cb-ctx-chip-run-error" data-ctx="run_error">💥 ' + I.t("runErrorLabel") + '</button>\n'+
+      '</div>\n'+
       '<div id="cb-input-area">\n'+
       '  <textarea id="cb-input" rows="1" data-i18n-placeholder="inputPlaceholder" placeholder="' + I.t("inputPlaceholder") + '"></textarea>\n'+
       '  <button id="cb-send" data-i18n="send">' + I.t("send") + '</button>\n'+
       '</div>\n'
     );
-
     document.body.appendChild(root);
-    return root;
   }
 
   // ── Cache refs ─────────────────────────────────────────────────
   function cacheAll() {
     return {
-      root: $("chat-bridge-root"), grabber: $("cb-grabber"), dot: $("cb-dot"),
-      toggleBtn: $("cb-toggle"), streamToggle: $("cb-stream-toggle"), langToggle: $("cb-lang-toggle"),
+      root: $("chat-bridge-root"), ball: $("cb-ball"), badge: $("cb-ball-badge"),
+      dot: $("cb-dot"), closeBtn: $("cb-close-panel"),
+      streamToggle: $("cb-stream-toggle"), langToggle: $("cb-lang-toggle"),
       apiHeader: $("cb-api-header"), apiArrow: $("cb-api-arrow"), apiBody: $("cb-api-body"),
       url: $("cb-url"), key: $("cb-key"), keyToggle: $("cb-key-toggle"),
       model: $("cb-model"), modelList: $("cb-model-list"), refreshBtn: $("cb-refresh-models"),
       sys: $("cb-sys"), saveBtn: $("cb-save-config"),
-      ctxHeader: $("cb-ctx-header"), ctxArrow: $("cb-ctx-arrow"), ctxBody: $("cb-ctx-body"),
-      ctxWorkflow: $("cb-ctx-workflow"), ctxNodes: $("cb-ctx-nodes"),
-      ctxDialogError: $("cb-ctx-dialog-error"), ctxConsoleError: $("cb-ctx-console-error"),
       appearanceHeader: $("cb-appearance-header"), appearanceArrow: $("cb-appearance-arrow"), appearanceBody: $("cb-appearance-body"),
       fontSize: $("cb-font-size"), fontSizeVal: $("cb-font-size-val"),
       panelWidth: $("cb-panel-width"), panelWidthVal: $("cb-panel-width-val"),
@@ -199,106 +194,210 @@
       imgBar: $("cb-img-bar"), imgCanvasBtn: $("cb-img-canvas"),
       imgCount: $("cb-img-count"), imgList: $("cb-img-list"), imgClear: $("cb-img-clear"),
       messages: $("cb-messages"), input: $("cb-input"), sendBtn: $("cb-send"),
+      ctxBar: $("cb-ctx-bar"),
+      chipWorkflow: $("cb-ctx-chip-workflow"), chipNodes: $("cb-ctx-chip-nodes"),
+      chipCanvasError: $("cb-ctx-chip-canvas-error"), chipRunError: $("cb-ctx-chip-run-error"),
     };
   }
 
   // ── UI helpers ─────────────────────────────────────────────────
   function toggleSection(hdr, arr, body) { body.classList.toggle("open"); arr.classList.toggle("open"); }
+  function addMsg(role, text) { var msgs = $("cb-messages"); if (!msgs) return null; var d = document.createElement("div"); d.className = "cb-msg " + role; d.textContent = text; msgs.appendChild(d); scrollBottom(msgs); return d; }
+  function addHtmlMsg(role, html) { var msgs = $("cb-messages"); if (!msgs) return null; var d = document.createElement("div"); d.className = "cb-msg " + role; d.innerHTML = html; msgs.appendChild(d); scrollBottom(msgs); return d; }
 
-  function addMsg(role, text) {
-    var msgs = $("cb-messages"); if (!msgs) return null;
-    var d = document.createElement("div"); d.className = "cb-msg " + role;
-    d.textContent = text; msgs.appendChild(d); scrollBottom(msgs); return d;
+  // ── Floating ball ──────────────────────────────────────────────
+  var ballPos = { x: -1, y: -1 };
+  function loadBallPos() {
+    try { var raw = localStorage.getItem("cb_ball_pos"); if (raw) { var p = JSON.parse(raw); ballPos.x = p.x; ballPos.y = p.y; } } catch(e) {}
+  }
+  function saveBallPos() { localStorage.setItem("cb_ball_pos", JSON.stringify(ballPos)); }
+
+  function initBallDrag() {
+    loadBallPos();
+    var ball = $("cb-ball"); if (!ball) return;
+    if (ballPos.x > 0) { ball.style.right = "auto"; ball.style.left = ballPos.x + "px"; ball.style.top = ballPos.y + "px"; ball.style.transform = "none"; }
+    var dragging = false, sx, sy, bx, by;
+    ball.addEventListener("mousedown", function(e) { if (e.button !== 0) return; dragging = true; sx = e.clientX; sy = e.clientY; var r = ball.getBoundingClientRect(); bx = r.left; by = r.top; ball.style.cursor = "grabbing"; e.preventDefault(); });
+    window.addEventListener("mousemove", function(e) { if (!dragging) return; var dx = e.clientX - sx, dy = e.clientY - sy; ball.style.right = "auto"; ball.style.left = Math.max(0, Math.min(window.innerWidth - 44, bx + dx)) + "px"; ball.style.top = Math.max(0, Math.min(window.innerHeight - 44, by + dy)) + "px"; ball.style.transform = "none"; });
+    window.addEventListener("mouseup", function() { if (!dragging) return; dragging = false; ball.style.cursor = "grab"; var r = ball.getBoundingClientRect(); ballPos.x = r.left; ballPos.y = r.top; saveBallPos(); });
+    ball.addEventListener("click", function(e) { if (dragging) return; openPanel(); });
   }
 
-  function addHtmlMsg(role, html) {
-    var msgs = $("cb-messages"); if (!msgs) return null;
-    var d = document.createElement("div"); d.className = "cb-msg " + role;
-    d.innerHTML = html; msgs.appendChild(d); scrollBottom(msgs); return d;
+  function openPanel() {
+    var $ = cacheAll(); if (!$.root.classList.contains("cb-hidden")) return;
+    $.root.classList.remove("cb-hidden"); $.ball.style.opacity = "0"; $.ball.style.pointerEvents = "none";
+    if ($.input) $.input.focus();
+  }
+  function closePanel() {
+    var $ = cacheAll(); if ($.root.classList.contains("cb-hidden")) return;
+    $.root.classList.add("cb-hidden"); $.ball.style.opacity = "1"; $.ball.style.pointerEvents = "auto";
   }
 
-  function isVisible(el) { var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.left > 50; }
+  document.addEventListener("click", function(e) {
+    var $ = cacheAll() || {};
+    if ($.root && !$.root.classList.contains("cb-hidden") && !$.root.contains(e.target) && e.target !== $.ball && !$.ball.contains(e.target)) {
+      closePanel();
+    }
+  });
 
-  // ── Image bar ──────────────────────────────────────────────────
-  function updateImageBar() {
-    var $ = cacheAll();
-    var sel = imageStore.filter(function(x){ return x.selected; });
-    if (imageStore.length === 0) { if ($.imgBar) $.imgBar.classList.remove("show"); return; }
-    if ($.imgBar) $.imgBar.classList.add("show");
-    if ($.imgCount) $.imgCount.textContent = sel.length + " / " + imageStore.length + " " + I.t("imgCount");
-    if ($.imgList) {
-      $.imgList.innerHTML = "";
-      imageStore.forEach(function(e, i) {
-        var chip = document.createElement("div");
-        chip.className = e.selected ? "cb-img-chip" : "cb-img-chip deselected";
-        var img = document.createElement("img"); img.src = e.dataUrl;
-        var rm = document.createElement("span"); rm.className = "cb-img-rm"; rm.textContent = "×";
-        rm.addEventListener("click", function(ev){ ev.stopPropagation(); imageStore.splice(i,1); updateImageBar(); });
-        chip.appendChild(img); chip.appendChild(rm);
-        chip.addEventListener("click", function(ev){ if(ev.target===rm) return; e.selected=!e.selected; updateImageBar(); });
-        $.imgList.appendChild(chip);
-      });
+  // ── Error collection ───────────────────────────────────────────
+  var allErrors = [];
+  var NOISE = /slow network|deprecated|fallback font|autocomplete.*404|components.*ignored|fetc?h\b.*404|net::err/i;
+
+  function pollPythonErrors() {
+    fetch("/api/chat-bridge/last-error")
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        if (d.error && !NOISE.test(d.error)) {
+          mergeError("run", d.error);
+        }
+      })
+      .catch(function() {});
+  }
+
+function scanCanvasErrors() {
+    allErrors = allErrors.filter(function(e) { return e.level !== "canvas"; });
+
+    try {
+      var appEl = document.getElementById("vue-app");
+      if (appEl && appEl.__vue_app__) {
+        var pinia = appEl.__vue_app__.config.globalProperties.$pinia;
+        if (pinia && pinia.state && pinia.state.value.workflow) {
+          var pw = pinia.state.value.workflow.activeWorkflow.pendingWarnings;
+          if (pw) {
+            var texts = [];
+            if (pw.missingNodeTypes) {
+              var nk = Object.keys(pw.missingNodeTypes);
+              for (var i = 0; i < nk.length; i++) {
+                texts.push("缺失节点类型: " + nk[i] + " (" + pw.missingNodeTypes[nk[i]] + "处)");
+              }
+            }
+            if (pw.missingModelCandidates) {
+              var mk = Object.keys(pw.missingModelCandidates);
+              for (var j = 0; j < mk.length; j++) {
+                texts.push("缺失模型候选: " + mk[j]);
+              }
+            }
+            if (texts.length > 0) {
+              mergeError("canvas", texts.join("\n"));
+            }
+          }
+        }
+      }
+    } catch(e) {}
+
+    updateBallColor();
+}
+
+  var recentDialogError = "";
+  var recentConsoleError = "";
+  function hookDialogErrors() {
+    (function chk(){
+      if (window.app && window.app.ui && window.app.ui.dialog && window.app.ui.dialog.show) {
+        var orig = window.app.ui.dialog.show.bind(window.app.ui.dialog);
+        window.app.ui.dialog.show = function(html) {
+          try {
+            var tmp = document.createElement("div"); tmp.innerHTML = html;
+            var txt = (tmp.textContent || tmp.innerText || "").trim();
+            if (!txt) txt = String(html).trim();
+            if (txt && txt.length > 10 && !txt.includes("Queue prompt") && !txt.includes("Prompt executed") && !NOISE.test(txt)) {
+              recentDialogError = txt.slice(0, 4000);
+              mergeError("dialog", txt);
+            }
+          } catch(e) {}
+          return orig(html);
+        };
+        console.log("[ChatBridge] Dialog hook active.");
+      } else { setTimeout(chk, 500); }
+    })();
+  }
+
+  function hookConsoleErrors() {
+    var origError = console.error.bind(console);
+    var origWarn = console.warn.bind(console);
+    console.error = function() {
+      var msg = Array.prototype.slice.call(arguments).join(" ");
+      if (msg.length > 10 && !/queue/i.test(msg) && !NOISE.test(msg)) {
+        recentConsoleError = (recentConsoleError ? recentConsoleError + "\n" : "") + msg.slice(0, 1000);
+        if (recentConsoleError.length > 4000) recentConsoleError = recentConsoleError.slice(-4000);
+        var level = /warning|deprecat/i.test(msg) ? "warn" : "dialog";
+        mergeError(level, msg);
+      }
+      return origError.apply(console, arguments);
+    };
+    console.warn = function() {
+      var msg = Array.prototype.slice.call(arguments).join(" ");
+      if (msg.length > 10 && /missing|failed|error|exception/i.test(msg) && !NOISE.test(msg)) {
+        recentConsoleError = (recentConsoleError ? recentConsoleError + "\n" : "") + msg.slice(0, 1000);
+        if (recentConsoleError.length > 4000) recentConsoleError = recentConsoleError.slice(-4000);
+        mergeError("warn", msg);
+      }
+      return origWarn.apply(console, arguments);
+    };
+    console.log("[ChatBridge] Console hook active.");
+  }
+
+  function mergeError(level, text) {
+    for (var i = 0; i < allErrors.length; i++) {
+      if (allErrors[i].text === text) return;
+    }
+    allErrors.push({ level: level, text: text, time: Date.now() });
+    if (allErrors.length > 20) allErrors = allErrors.slice(-20);
+    updateBallColor();
+    updateChipLabels();
+  }
+
+  function updateBallColor() {
+    var $ = cacheAll() || {}; if (!$.ball) return;
+    var levels = allErrors.map(function(e) { return e.level; });
+    var colorClass = "green", count = allErrors.length;
+    if (levels.indexOf("run") !== -1) colorClass = "red";
+    else if (levels.indexOf("canvas") !== -1 || levels.indexOf("dialog") !== -1) colorClass = "yellow";
+    else if (levels.indexOf("warn") !== -1) colorClass = "purple";
+    $.ball.className = $.ball.className.replace(/green|purple|yellow|red/g, "") + " " + colorClass;
+    if ($.badge) { if (count > 0) { $.badge.textContent = count; $.badge.classList.add("show"); } else { $.badge.classList.remove("show"); } }
+  }
+
+  function updateChipLabels() {
+    var $ = cacheAll() || {};
+    var canvasCount = allErrors.filter(function(e) { return e.level === "canvas" || e.level === "dialog"; }).length;
+    var runCount = allErrors.filter(function(e) { return e.level === "run"; }).length;
+    if ($.chipCanvasError) {
+      $.chipCanvasError.textContent = "🎨 " + I.t("canvasErrorLabel") + (canvasCount > 0 ? " (" + canvasCount + ")" : "");
+      $.chipCanvasError.classList.toggle("has-errors", canvasCount > 0);
+    }
+    if ($.chipRunError) {
+      $.chipRunError.textContent = "💥 " + I.t("runErrorLabel") + (runCount > 0 ? " (" + runCount + ")" : "");
+      $.chipRunError.classList.toggle("has-errors", runCount > 0);
     }
   }
 
-  function captureCanvasImages() {
-    try {
-      var cs = document.querySelectorAll("canvas"), cnt = 0;
-      for (var i = 0; i < cs.length; i++) {
-        if (cs[i].width > 32 && cs[i].height > 32 && isVisible(cs[i])) {
-          try { imageStore.push({ dataUrl: cs[i].toDataURL("image/jpeg", 0.7), source: "canvas", selected: true }); cnt++; if (cnt >= 6) break; } catch {}
-        }
-      }
-      if (cnt > 0) { updateImageBar(); addMsg("system", I.tReplace("imgCaptured", "N", cnt)); }
-      else addMsg("system", I.t("noCanvasImg"));
-    } catch(e) { addMsg("system", I.t("captureFailed") + " " + e.message); }
+  // ── Context chips ─────────────────────────────────────────────
+  function toggleCtxChip(chipEl) {
+    if (!chipEl) return;
+    var key = chipEl.getAttribute("data-ctx");
+    if (!key) return;
+    ctxChips[key] = !ctxChips[key];
+    chipEl.classList.toggle("active", ctxChips[key]);
   }
 
-  function setupPasteHandler() {
+  function resetAllChips() {
     var $ = cacheAll();
-    document.addEventListener("paste", function(e) {
-      if (!$.root || $.root.classList.contains("collapsed")) return;
-      var items = e.clipboardData && e.clipboardData.items; if (!items) return;
-      for (var i = 0; i < items.length; i++) {
-        if (items[i].type.startsWith("image/")) {
-          e.preventDefault();
-          var reader = new FileReader();
-          reader.onload = function() { imageStore.push({ dataUrl: reader.result, source: "paste", selected: true }); updateImageBar(); };
-          reader.readAsDataURL(items[i].getAsFile()); break;
-        }
-      }
-    });
-  }
-
-  // ── Code copy ──────────────────────────────────────────────────
-  function setupCodeCopy() {
-    var msgs = $("cb-messages"); if (!msgs) return;
-    msgs.addEventListener("click", function(e) {
-      var btn = e.target.closest(".cb-copy-btn"); if (!btn) return;
-      var block = btn.closest(".cb-code-block"); if (!block) return;
-      var code = block.querySelector("code"); var txt = code ? code.textContent : "";
-      navigator.clipboard.writeText(txt).then(function(){
-        btn.textContent="✓"; btn.classList.add("copied"); btn.title = I.t("copied");
-        setTimeout(function(){ btn.textContent="📋"; btn.classList.remove("copied"); btn.title = I.t("copyCode"); }, 1500);
-      }).catch(function(){
-        var ta = document.createElement("textarea"); ta.value = txt;
-        ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta);
-        ta.select(); document.execCommand("copy"); document.body.removeChild(ta);
-        btn.textContent="✓"; btn.classList.add("copied"); btn.title = I.t("copied");
-        setTimeout(function(){ btn.textContent="📋"; btn.classList.remove("copied"); btn.title = I.t("copyCode"); }, 1500);
-      });
-    });
+    ctxChips = { workflow: false, nodes: false, canvas_error: false, run_error: false };
+    if ($.chipWorkflow) $.chipWorkflow.classList.remove("active");
+    if ($.chipNodes) $.chipNodes.classList.remove("active");
+    if ($.chipCanvasError) $.chipCanvasError.classList.remove("active");
+    if ($.chipRunError) $.chipRunError.classList.remove("active");
   }
 
   // ── Context collection ─────────────────────────────────────────
   function collectContext() {
-    var $ = cacheAll();
-    var ctx = { workflow_json: null, selected_nodes: null, dialog_error: null, console_error: null, images: null, summary: null };
+    var ctx = { workflow_json: null, selected_nodes: null, error_text: null, images: null, summary: null, _pending_workflow: null };
 
-    if ($.ctxWorkflow && $.ctxWorkflow.checked) {
+    if (ctxChips.workflow) {
       try { if (window.app && window.app.graph) ctx.workflow_json = JSON.stringify(window.app.graph.serialize(), null, 2); } catch {}
     }
-    if ($.ctxNodes && $.ctxNodes.checked) {
+    if (ctxChips.nodes) {
       try {
         if (window.app && window.app.canvas && window.app.canvas.selected_nodes) {
           var sel = {};
@@ -310,23 +409,32 @@
         }
       } catch {}
     }
-    if ($.ctxDialogError && $.ctxDialogError.checked && recentDialogError) ctx.dialog_error = recentDialogError;
-    if ($.ctxConsoleError && $.ctxConsoleError.checked && recentConsoleError) ctx.console_error = recentConsoleError;
+
+    // Store workflow for Python validation if canvas_error chip is active
+    if (ctxChips.canvas_error) {
+      try {
+        if (window.app && window.app.graph) {
+          ctx._pending_workflow = JSON.stringify(window.app.graph.serialize());
+        }
+      } catch(e) {}
+    }
+
+    var errorsToSend = [];
+    if (ctxChips.run_error) {
+      errorsToSend = errorsToSend.concat(allErrors.filter(function(e) { return e.level === "run"; }));
+    }
+    if (errorsToSend.length > 0) {
+      ctx.error_text = errorsToSend.map(function(e) { return "[" + e.level.toUpperCase() + "] " + e.text; }).join("\n\n").slice(0, 6000);
+    }
 
     var selImgs = imageStore.filter(function(x){ return x.selected; }).map(function(x){ return x.dataUrl; });
     if (selImgs.length > 0) ctx.images = selImgs;
 
-    var mergedErrors = [];
-    if (ctx.dialog_error) mergedErrors.push(I.t("dialogErrorLabel") + "\n" + ctx.dialog_error);
-    if (ctx.console_error) mergedErrors.push(I.t("consoleErrorLabel") + "\n" + ctx.console_error);
-    ctx.recent_error = mergedErrors.length > 0 ? mergedErrors.join("\n\n") : null;
-
     var parts = [];
     if (ctx.workflow_json) parts.push(I.t("workflowLabel"));
     if (ctx.selected_nodes) parts.push(I.t("nodesLabel"));
+    if (ctx.error_text) parts.push(I.t("errorLogLabel"));
     if (ctx.images) parts.push(ctx.images.length + " " + I.t("imagesLabel"));
-    if (ctx.dialog_error) parts.push(I.t("dialogErrorLabel"));
-    if (ctx.console_error) parts.push(I.t("consoleErrorLabel"));
     ctx.summary = parts.length > 0 ? parts.join(" + ") : null;
 
     return ctx;
@@ -345,6 +453,26 @@
     $.input.value = ""; $.input.style.height = "auto";
 
     var ctx = collectContext();
+
+    // Validate workflow via Python if canvas_error chip active
+    if (ctxChips.canvas_error && ctx._pending_workflow) {
+      try {
+        var vres = await fetch("/api/chat-bridge/validate-workflow", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ workflow: ctx._pending_workflow })
+        });
+        var vd = await vres.json();
+        var vparts = [];
+        if (vd.missing_nodes && vd.missing_nodes.length) vparts.push("缺失节点: " + vd.missing_nodes.join(", "));
+        if (vd.missing_models && vd.missing_models.length) vparts.push(vd.missing_models.join("\n"));
+        if (vparts.length) {
+          ctx.error_text = (ctx.error_text || "") + "\n[画布错误]\n" + vparts.join("\n");
+        }
+        if (vparts.length) mergeError("canvas", vparts.join("\n"));
+      } catch(e) {}
+    }
+
     var body = {
       base_url: url, api_key: ($.key.value || "").trim(),
       model: ($.model.value || "").trim() || "auto",
@@ -353,10 +481,11 @@
       temperature: parseFloat($.temp.value), max_tokens: parseInt($.maxTok.value),
       top_k: parseInt($.topk.value), top_p: parseFloat($.topp.value),
       workflow_json: ctx.workflow_json, selected_nodes: ctx.selected_nodes,
-      recent_error: ctx.recent_error, images: ctx.images, context_summary: ctx.summary,
+      recent_error: ctx.error_text, images: ctx.images, context_summary: ctx.summary,
     };
 
     imageStore = []; updateImageBar();
+    resetAllChips();
 
     if (streamOn) await sendStream(body, ctx);
     else await sendNonStream(body, ctx);
@@ -405,12 +534,77 @@
     history.push({ role: "assistant", content: full });
   }
 
-  // ── Error badges helper ────────────────────────────────────────
-  function clearErrorBadges() {
-    var root = document.getElementById("chat-bridge-root");
-    if (!root) return;
-    var badges = root.querySelectorAll(".cb-err-badge, .cb-con-badge");
-    for (var i = 0; i < badges.length; i++) badges[i].textContent = "";
+  // ── Image bar ──────────────────────────────────────────────────
+  function updateImageBar() {
+    var $ = cacheAll();
+    var sel = imageStore.filter(function(x){ return x.selected; });
+    if (imageStore.length === 0) { if ($.imgBar) $.imgBar.classList.remove("show"); return; }
+    if ($.imgBar) $.imgBar.classList.add("show");
+    if ($.imgCount) $.imgCount.textContent = sel.length + " / " + imageStore.length + " " + I.t("imgCount");
+    if ($.imgList) {
+      $.imgList.innerHTML = "";
+      imageStore.forEach(function(e, i) {
+        var chip = document.createElement("div");
+        chip.className = e.selected ? "cb-img-chip" : "cb-img-chip deselected";
+        var img = document.createElement("img"); img.src = e.dataUrl;
+        var rm = document.createElement("span"); rm.className = "cb-img-rm"; rm.textContent = "×";
+        rm.addEventListener("click", function(ev){ ev.stopPropagation(); imageStore.splice(i,1); updateImageBar(); });
+        chip.appendChild(img); chip.appendChild(rm);
+        chip.addEventListener("click", function(ev){ if(ev.target===rm) return; e.selected=!e.selected; updateImageBar(); });
+        $.imgList.appendChild(chip);
+      });
+    }
+  }
+
+  function isVisible(el) { var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.left > 50; }
+
+  function captureCanvasImages() {
+    try {
+      var cs = document.querySelectorAll("canvas"), cnt = 0;
+      for (var i = 0; i < cs.length; i++) {
+        if (cs[i].width > 32 && cs[i].height > 32 && isVisible(cs[i])) {
+          try { imageStore.push({ dataUrl: cs[i].toDataURL("image/jpeg", 0.7), source: "canvas", selected: true }); cnt++; if (cnt >= 6) break; } catch {}
+        }
+      }
+      if (cnt > 0) { updateImageBar(); addMsg("system", I.t("imgCaptured").replace("N", cnt)); }
+      else addMsg("system", I.t("noCanvasImg"));
+    } catch(e) { addMsg("system", I.t("captureFailed") + " " + e.message); }
+  }
+
+  function setupPasteHandler() {
+    var $ = cacheAll();
+    document.addEventListener("paste", function(e) {
+      if (!$.root || $.root.classList.contains("cb-hidden")) return;
+      var items = e.clipboardData && e.clipboardData.items; if (!items) return;
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith("image/")) {
+          e.preventDefault();
+          var reader = new FileReader();
+          reader.onload = function() { imageStore.push({ dataUrl: reader.result, source: "paste", selected: true }); updateImageBar(); };
+          reader.readAsDataURL(items[i].getAsFile()); break;
+        }
+      }
+    });
+  }
+
+  // ── Code copy ──────────────────────────────────────────────────
+  function setupCodeCopy() {
+    var msgs = $("cb-messages"); if (!msgs) return;
+    msgs.addEventListener("click", function(e) {
+      var btn = e.target.closest(".cb-copy-btn"); if (!btn) return;
+      var block = btn.closest(".cb-code-block"); if (!block) return;
+      var code = block.querySelector("code"); var txt = code ? code.textContent : "";
+      navigator.clipboard.writeText(txt).then(function(){
+        btn.textContent="✓"; btn.classList.add("copied"); btn.title = I.t("copied");
+        setTimeout(function(){ btn.textContent="📋"; btn.classList.remove("copied"); btn.title = I.t("copyCode"); }, 1500);
+      }).catch(function(){
+        var ta = document.createElement("textarea"); ta.value = txt;
+        ta.style.cssText = "position:fixed;opacity:0;"; document.body.appendChild(ta);
+        ta.select(); document.execCommand("copy"); document.body.removeChild(ta);
+        btn.textContent="✓"; btn.classList.add("copied"); btn.title = I.t("copied");
+        setTimeout(function(){ btn.textContent="📋"; btn.classList.remove("copied"); btn.title = I.t("copyCode"); }, 1500);
+      });
+    });
   }
 
   // ── Clear / Save ──────────────────────────────────────────────
@@ -420,8 +614,10 @@
     imageStore = [];
     recentDialogError = "";
     recentConsoleError = "";
-    clearErrorBadges();
+    allErrors = [];
     updateImageBar();
+    updateBallColor();
+    updateChipLabels();
     if ($.messages) $.messages.innerHTML = "";
     addMsg("system", I.t("historyCleared"));
   }
@@ -449,7 +645,7 @@
       if (d.models && d.models.length > 0) {
         modelList = d.models;
         if ($.modelList) { $.modelList.innerHTML = ""; d.models.forEach(function(m){ var o = document.createElement("option"); o.value = m; $.modelList.appendChild(o); }); }
-        addMsg("system", I.tReplace("modelsLoaded", "N", d.models.length));
+        addMsg("system", I.t("modelsLoaded").replace("N", d.models.length));
       } else { addMsg("system", I.t("noModels")); modelList = []; }
     } catch(e) { addMsg("system", I.t("fetchFailed") + " " + e.message); }
     $.refreshBtn.textContent = "🔄"; $.refreshBtn.disabled = false;
@@ -458,37 +654,22 @@
   // ── Apply config ──────────────────────────────────────────────
   function applyConfig(cfg) {
     var $ = cacheAll();
-
     I.setLang(cfg.lang || "zh");
-
     $.root.style.setProperty("--cb-font-size", (cfg.font_size || 13) + "px");
     $.root.style.setProperty("--cb-panel-width", (cfg.panel_width || 390) + "px");
-
     $.url.value = cfg.base_url || ""; $.key.value = cfg.api_key || "";
     $.model.value = cfg.model || ""; $.sys.value = cfg.system_prompt || "";
-
     $.temp.value = cfg.temperature; $.tempVal.textContent = cfg.temperature.toFixed(1);
     $.maxTok.value = cfg.max_tokens; $.maxTokVal.textContent = cfg.max_tokens;
     $.topk.value = cfg.top_k; $.topkVal.textContent = cfg.top_k;
     $.topp.value = cfg.top_p; $.toppVal.textContent = cfg.top_p.toFixed(2);
-
-    $.ctxWorkflow.checked = cfg.context_workflow;
-    $.ctxNodes.checked = cfg.context_nodes;
-    if ($.ctxDialogError) $.ctxDialogError.checked = cfg.context_dialog_error;
-    if ($.ctxConsoleError) $.ctxConsoleError.checked = cfg.context_console_error;
-
     $.fontSize.value = cfg.font_size || 13; $.fontSizeVal.textContent = cfg.font_size || 13;
     $.panelWidth.value = cfg.panel_width || 390; $.panelWidthVal.textContent = cfg.panel_width || 390;
-
     if (cfg.stream_enabled) { $.streamToggle.classList.add("active"); $.streamToggle.textContent = "🌊"; }
     else { $.streamToggle.classList.remove("active"); $.streamToggle.textContent = "📄"; }
-
     if (!cfg.api_collapsed) { $.apiBody.classList.add("open"); $.apiArrow.classList.add("open"); }
     if (!cfg.params_collapsed) { $.paramsBody.classList.add("open"); $.paramsArrow.classList.add("open"); }
-    if (!cfg.context_collapsed) { $.ctxBody.classList.add("open"); $.ctxArrow.classList.add("open"); }
     if (!cfg.appearance_collapsed) { $.appearanceBody.classList.add("open"); $.appearanceArrow.classList.add("open"); }
-    if (cfg.panel_collapsed) { $.root.classList.add("collapsed"); $.toggleBtn.textContent = "▶"; }
-
     refreshUIText();
   }
 
@@ -500,139 +681,29 @@
       temperature: parseFloat($.temp.value), max_tokens: parseInt($.maxTok.value),
       top_k: parseInt($.topk.value), top_p: parseFloat($.topp.value),
       stream_enabled: $.streamToggle.classList.contains("active"),
-      context_workflow: $.ctxWorkflow.checked, context_nodes: $.ctxNodes.checked,
-      context_dialog_error: $.ctxDialogError ? $.ctxDialogError.checked : true,
-      context_console_error: $.ctxConsoleError ? $.ctxConsoleError.checked : true,
       font_size: parseInt($.fontSize.value), panel_width: parseInt($.panelWidth.value),
       lang: I.getLang(),
-      panel_collapsed: $.root.classList.contains("collapsed"),
+      panel_collapsed: false,
       api_collapsed: !$.apiBody.classList.contains("open"),
       params_collapsed: !$.paramsBody.classList.contains("open"),
-      context_collapsed: !$.ctxBody.classList.contains("open"),
       appearance_collapsed: !$.appearanceBody.classList.contains("open"),
     });
     addMsg("system", I.t("configSaved"));
   }
 
-  // ── Collapse / Expand ─────────────────────────────────────────
-  function collapsePanel() { var $ = cacheAll(); $.root.classList.add("collapsed"); $.toggleBtn.textContent = "▶"; saveConfigFromUI(); }
-  function expandPanel() { var $ = cacheAll(); $.root.classList.remove("collapsed"); $.toggleBtn.textContent = "◀"; saveConfigFromUI(); }
-
-  // ── Error hooks ────────────────────────────────────────────────
-  function hookDialogErrors() {
-    (function chk(){
-      if (window.app && window.app.ui && window.app.ui.dialog && window.app.ui.dialog.show) {
-        var orig = window.app.ui.dialog.show.bind(window.app.ui.dialog);
-        window.app.ui.dialog.show = function(html) {
-          try {
-            var tmp = document.createElement("div"); tmp.innerHTML = html;
-            var txt = (tmp.textContent || tmp.innerText || "").trim();
-            if (!txt) txt = String(html).trim();
-            console.log("[ChatBridge] Dialog intercepted (" + txt.length + " chars):", txt.slice(0, 150));
-            if (txt && txt.length > 10 && !txt.includes("Queue prompt") && !txt.includes("Prompt executed")) {
-              recentDialogError = txt.slice(0, 4000);
-              var $ = cacheAll();
-              if ($.ctxDialogError && $.ctxDialogError.parentNode) {
-                var badge = $.ctxDialogError.parentNode.querySelector(".cb-err-badge");
-                if (!badge) {
-                  badge = document.createElement("span");
-                  badge.className = "cb-err-badge";
-                  badge.style.cssText = "color:#ef4444;font-size:11px;margin-left:2px;";
-                  $.ctxDialogError.parentNode.appendChild(badge);
-                }
-                badge.textContent = " ⬤";
-              }
-            }
-          } catch(e) { console.warn("[ChatBridge] Dialog hook error:", e); }
-          return orig(html);
-        };
-        console.log("[ChatBridge] Dialog error hook active.");
-      } else { setTimeout(chk, 500); }
-    })();
-  }
-
-  function hookConsoleErrors() {
-    var origError = console.error.bind(console);
-    var origWarn = console.warn.bind(console);
-
-    function updateConsoleBadge() {
-      var $ = cacheAll();
-      if ($.ctxConsoleError && $.ctxConsoleError.parentNode) {
-        var badge = $.ctxConsoleError.parentNode.querySelector(".cb-con-badge");
-        if (!badge) {
-          badge = document.createElement("span");
-          badge.className = "cb-con-badge";
-          badge.style.cssText = "color:#f59e0b;font-size:11px;margin-left:2px;";
-          $.ctxConsoleError.parentNode.appendChild(badge);
-        }
-        badge.textContent = " ⬤";
-      }
-    }
-
-    console.error = function() {
-      var args = Array.prototype.slice.call(arguments);
-      var msg = args.join(" ");
-      if (msg.length > 10 && !/queue/i.test(msg) && !/prompt executed/i.test(msg)) {
-        recentConsoleError = (recentConsoleError ? recentConsoleError + "\n" : "") + msg.slice(0, 1000);
-        if (recentConsoleError.length > 4000) recentConsoleError = recentConsoleError.slice(-4000);
-        updateConsoleBadge();
-      }
-      return origError.apply(console, arguments);
-    };
-
-    console.warn = function() {
-      var args = Array.prototype.slice.call(arguments);
-      var msg = args.join(" ");
-      if (msg.length > 10 && /missing|failed|error|exception/i.test(msg)) {
-        recentConsoleError = (recentConsoleError ? recentConsoleError + "\n" : "") + msg.slice(0, 1000);
-        if (recentConsoleError.length > 4000) recentConsoleError = recentConsoleError.slice(-4000);
-        updateConsoleBadge();
-      }
-      return origWarn.apply(console, arguments);
-    };
-
-    console.log("[ChatBridge] Console error hook active.");
-  }
-
-  function hookExecutionErrors() {
-    (function chk(){
-      if (window.app && window.app.api && typeof window.app.api.addEventListener === "function") {
-        window.app.api.addEventListener("execution_error", function(e) {
-          var detail = (e && e.detail) ? e.detail : e;
-          var msg = (detail.exception_message || detail.message || "") + "\n" + (detail.traceback || "");
-          if (!msg.trim() || msg.trim().length < 10) return;
-          console.log("[ChatBridge] Execution error intercepted (" + msg.length + " chars):", msg.slice(0, 200));
-          recentDialogError = msg.slice(0, 4000);
-          var $ = cacheAll();
-          if ($.ctxDialogError && $.ctxDialogError.parentNode) {
-            var badge = $.ctxDialogError.parentNode.querySelector(".cb-err-badge");
-            if (!badge) {
-              badge = document.createElement("span");
-              badge.className = "cb-err-badge";
-              badge.style.cssText = "color:#ef4444;font-size:11px;margin-left:2px;";
-              $.ctxDialogError.parentNode.appendChild(badge);
-            }
-            badge.textContent = " ⬤";
-          }
-        });
-        console.log("[ChatBridge] Execution error hook active.");
-      } else { setTimeout(chk, 500); }
-    })();
-  }
-
   // ── Init ───────────────────────────────────────────────────────
   function init() {
+    var cfg = loadConfig();
+    I.setLang(cfg.lang || "zh");
     buildPanel();
     var $ = cacheAll();
-    var cfg = loadConfig();
-
-    I.setLang(cfg.lang || "zh");
+	
     applyConfig(cfg);
 
+    initBallDrag();
     setupCodeCopy();
 
-    $.toggleBtn.addEventListener("click", collapsePanel);
-    $.grabber.addEventListener("click", expandPanel);
+    $.closeBtn.addEventListener("click", closePanel);
 
     $.langToggle.addEventListener("click", function(e){
       e.stopPropagation();
@@ -642,13 +713,10 @@
     });
 
     $.apiHeader.addEventListener("click", function(){ toggleSection($.apiHeader, $.apiArrow, $.apiBody); saveConfigFromUI(); });
-    $.ctxHeader.addEventListener("click", function(){ toggleSection($.ctxHeader, $.ctxArrow, $.ctxBody); saveConfigFromUI(); });
     $.appearanceHeader.addEventListener("click", function(){ toggleSection($.appearanceHeader, $.appearanceArrow, $.appearanceBody); saveConfigFromUI(); });
     $.paramsHeader.addEventListener("click", function(){ toggleSection($.paramsHeader, $.paramsArrow, $.paramsBody); saveConfigFromUI(); });
 
-    $.keyToggle.addEventListener("click", function(){
-      var isPw = $.key.type === "password"; $.key.type = isPw ? "text" : "password"; $.keyToggle.textContent = isPw ? "🙈" : "👁";
-    });
+    $.keyToggle.addEventListener("click", function(){ var isPw = $.key.type === "password"; $.key.type = isPw ? "text" : "password"; $.keyToggle.textContent = isPw ? "🙈" : "👁"; });
 
     $.saveBtn.addEventListener("click", saveConfigFromUI);
     [$.url, $.key, $.model, $.sys].forEach(function(el){ el.addEventListener("blur", saveConfigFromUI); });
@@ -657,17 +725,10 @@
     $.maxTok.addEventListener("input", function(){ $.maxTokVal.textContent = $.maxTok.value; });
     $.topk.addEventListener("input", function(){ $.topkVal.textContent = $.topk.value; });
     $.topp.addEventListener("input", function(){ $.toppVal.textContent = parseFloat($.topp.value).toFixed(2); });
-    $.fontSize.addEventListener("input", function(){
-      $.fontSizeVal.textContent = $.fontSize.value;
-      $.root.style.setProperty("--cb-font-size", $.fontSize.value + "px");
-    });
-    $.panelWidth.addEventListener("input", function(){
-      $.panelWidthVal.textContent = $.panelWidth.value;
-      $.root.style.setProperty("--cb-panel-width", $.panelWidth.value + "px");
-    });
+    $.fontSize.addEventListener("input", function(){ $.fontSizeVal.textContent = $.fontSize.value; $.root.style.setProperty("--cb-font-size", $.fontSize.value + "px"); });
+    $.panelWidth.addEventListener("input", function(){ $.panelWidthVal.textContent = $.panelWidth.value; $.root.style.setProperty("--cb-panel-width", $.panelWidth.value + "px"); });
 
     [$.temp, $.maxTok, $.topk, $.topp, $.fontSize, $.panelWidth].forEach(function(el){ el.addEventListener("change", saveConfigFromUI); });
-    [$.ctxWorkflow, $.ctxNodes, $.ctxDialogError, $.ctxConsoleError].forEach(function(el){ if(el) el.addEventListener("change", saveConfigFromUI); });
 
     $.streamToggle.addEventListener("click", function(e){
       e.stopPropagation();
@@ -675,6 +736,12 @@
       $.streamToggle.textContent = $.streamToggle.classList.contains("active") ? "🌊" : "📄";
       saveConfigFromUI();
     });
+
+    // ── Context chip toggles ──
+    if ($.chipWorkflow) $.chipWorkflow.addEventListener("click", function() { toggleCtxChip($.chipWorkflow); });
+    if ($.chipNodes) $.chipNodes.addEventListener("click", function() { toggleCtxChip($.chipNodes); });
+    if ($.chipCanvasError) $.chipCanvasError.addEventListener("click", function() { toggleCtxChip($.chipCanvasError); });
+    if ($.chipRunError) $.chipRunError.addEventListener("click", function() { toggleCtxChip($.chipRunError); });
 
     $.clearBtn.addEventListener("click", clearHistory);
     $.saveBtn2.addEventListener("click", saveHistory);
@@ -691,9 +758,12 @@
 
     hookDialogErrors();
     hookConsoleErrors();
-    hookExecutionErrors();
 
-    // ── Health check (fixed: uses /ping, zero network overhead) ──
+    // Error polling
+    pollPythonErrors();
+    setInterval(pollPythonErrors, 5000);
+    setInterval(scanCanvasErrors, 10000);
+
     setInterval(function(){
       if ($.dot) {
         fetch("/api/chat-bridge/ping")
