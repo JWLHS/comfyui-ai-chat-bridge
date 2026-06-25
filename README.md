@@ -216,10 +216,6 @@ AI Chat Bridge plugin loaded (routes: /api/chat-bridge/chat, /api/chat-bridge/ch
 ComfyUI 是否在运行？API 地址是否可访问？
 
 
-### 控制台频繁刷出 "Failed to list models from http://localhost:1/v1" 警告？
-
-这是面板每 30 秒检测 ComfyUI 后端是否在线的心跳信号，**完全无害**，不影响任何功能。它不是真正的 API 调用，不会访问你的 AI 服务。可以无视。
-
 ---
 
 ## 文件结构

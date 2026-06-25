@@ -64,24 +64,19 @@
 
   // ── I18N text refresh ─────────────────────────────────────────
   function refreshUIText() {
-    // Update all elements with data-i18n attribute
     var nodes = document.querySelectorAll("#chat-bridge-root [data-i18n]");
     for (var i = 0; i < nodes.length; i++) {
       nodes[i].textContent = I.t(nodes[i].getAttribute("data-i18n"));
     }
-    // Update placeholders
     var inputs = document.querySelectorAll("#chat-bridge-root [data-i18n-placeholder]");
     for (var j = 0; j < inputs.length; j++) {
       inputs[j].placeholder = I.t(inputs[j].getAttribute("data-i18n-placeholder"));
     }
-    // Update titles
     var titles = document.querySelectorAll("#chat-bridge-root [data-i18n-title]");
     for (var k = 0; k < titles.length; k++) {
       titles[k].title = I.t(titles[k].getAttribute("data-i18n-title"));
     }
-    // Update grabber text
     var gb = $("cb-grabber"); if (gb) gb.textContent = I.t("grabberText");
-    // Update stream toggle text
     var st = $("cb-stream-toggle");
     if (st) st.textContent = st.classList.contains("active") ? "🌊" : "📄";
   }
@@ -110,10 +105,8 @@
     root.className = "cb-root";
     root.id = "chat-bridge-root";
 
-    // Inject CSS
     root.insertAdjacentHTML("beforeend", CSS.get());
 
-    // Build HTML skeleton with data-i18n attributes
     root.insertAdjacentHTML("beforeend",
       '<div class="cb-grabber" id="cb-grabber" data-i18n-title="showPanel">' + I.t("grabberText") + '</div>\n'+
       '<div class="cb-titlebar" id="cb-titlebar">\n'+
@@ -322,7 +315,6 @@
     var selImgs = imageStore.filter(function(x){ return x.selected; }).map(function(x){ return x.dataUrl; });
     if (selImgs.length > 0) ctx.images = selImgs;
 
-    // Merge errors for the API payload (backward compat with server's "recent_error" field)
     var mergedErrors = [];
     if (ctx.dialog_error) mergedErrors.push(I.t("dialogErrorLabel") + "\n" + ctx.dialog_error);
     if (ctx.console_error) mergedErrors.push(I.t("consoleErrorLabel") + "\n" + ctx.console_error);
@@ -451,38 +443,30 @@
   function applyConfig(cfg) {
     var $ = cacheAll();
 
-    // Language
     I.setLang(cfg.lang || "zh");
 
-    // Font & panel width
     $.root.style.setProperty("--cb-font-size", (cfg.font_size || 13) + "px");
     $.root.style.setProperty("--cb-panel-width", (cfg.panel_width || 390) + "px");
 
-    // API
     $.url.value = cfg.base_url || ""; $.key.value = cfg.api_key || "";
     $.model.value = cfg.model || ""; $.sys.value = cfg.system_prompt || "";
 
-    // Params
     $.temp.value = cfg.temperature; $.tempVal.textContent = cfg.temperature.toFixed(1);
     $.maxTok.value = cfg.max_tokens; $.maxTokVal.textContent = cfg.max_tokens;
     $.topk.value = cfg.top_k; $.topkVal.textContent = cfg.top_k;
     $.topp.value = cfg.top_p; $.toppVal.textContent = cfg.top_p.toFixed(2);
 
-    // Context
     $.ctxWorkflow.checked = cfg.context_workflow;
     $.ctxNodes.checked = cfg.context_nodes;
     if ($.ctxDialogError) $.ctxDialogError.checked = cfg.context_dialog_error;
     if ($.ctxConsoleError) $.ctxConsoleError.checked = cfg.context_console_error;
 
-    // Appearance
     $.fontSize.value = cfg.font_size || 13; $.fontSizeVal.textContent = cfg.font_size || 13;
     $.panelWidth.value = cfg.panel_width || 390; $.panelWidthVal.textContent = cfg.panel_width || 390;
 
-    // Stream
     if (cfg.stream_enabled) { $.streamToggle.classList.add("active"); $.streamToggle.textContent = "🌊"; }
     else { $.streamToggle.classList.remove("active"); $.streamToggle.textContent = "📄"; }
 
-    // Sections
     if (!cfg.api_collapsed) { $.apiBody.classList.add("open"); $.apiArrow.classList.add("open"); }
     if (!cfg.params_collapsed) { $.paramsBody.classList.add("open"); $.paramsArrow.classList.add("open"); }
     if (!cfg.context_collapsed) { $.ctxBody.classList.add("open"); $.ctxArrow.classList.add("open"); }
@@ -569,17 +553,14 @@
     var $ = cacheAll();
     var cfg = loadConfig();
 
-    // Set language from config before applying UI
     I.setLang(cfg.lang || "zh");
     applyConfig(cfg);
 
     setupCodeCopy();
 
-    // Panel collapse
     $.toggleBtn.addEventListener("click", collapsePanel);
     $.grabber.addEventListener("click", expandPanel);
 
-    // Language toggle
     $.langToggle.addEventListener("click", function(e){
       e.stopPropagation();
       I.toggleLang();
@@ -587,7 +568,6 @@
       saveConfigFromUI();
     });
 
-    // Section toggles
     $.apiHeader.addEventListener("click", function(){ toggleSection($.apiHeader, $.apiArrow, $.apiBody); saveConfigFromUI(); });
     $.ctxHeader.addEventListener("click", function(){ toggleSection($.ctxHeader, $.ctxArrow, $.ctxBody); saveConfigFromUI(); });
     $.appearanceHeader.addEventListener("click", function(){ toggleSection($.appearanceHeader, $.appearanceArrow, $.appearanceBody); saveConfigFromUI(); });
@@ -600,7 +580,6 @@
     $.saveBtn.addEventListener("click", saveConfigFromUI);
     [$.url, $.key, $.model, $.sys].forEach(function(el){ el.addEventListener("blur", saveConfigFromUI); });
 
-    // Sliders
     $.temp.addEventListener("input", function(){ $.tempVal.textContent = parseFloat($.temp.value).toFixed(1); });
     $.maxTok.addEventListener("input", function(){ $.maxTokVal.textContent = $.maxTok.value; });
     $.topk.addEventListener("input", function(){ $.topkVal.textContent = $.topk.value; });
@@ -617,7 +596,6 @@
     [$.temp, $.maxTok, $.topk, $.topp, $.fontSize, $.panelWidth].forEach(function(el){ el.addEventListener("change", saveConfigFromUI); });
     [$.ctxWorkflow, $.ctxNodes, $.ctxDialogError, $.ctxConsoleError].forEach(function(el){ if(el) el.addEventListener("change", saveConfigFromUI); });
 
-    // Stream toggle
     $.streamToggle.addEventListener("click", function(e){
       e.stopPropagation();
       $.streamToggle.classList.toggle("active");
@@ -641,10 +619,12 @@
     hookDialogErrors();
     hookConsoleErrors();
 
+    // ── Health check (fixed: uses /ping, zero network overhead) ──
     setInterval(function(){
       if ($.dot) {
-        fetch("/api/chat-bridge/models", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ base_url: "http://localhost:1/v1", api_key: "" }) })
-          .then(function(){ $.dot.classList.add("on"); }).catch(function(){ $.dot.classList.remove("on"); });
+        fetch("/api/chat-bridge/ping")
+          .then(function(){ $.dot.classList.add("on"); })
+          .catch(function(){ $.dot.classList.remove("on"); });
       }
     }, 30000);
 

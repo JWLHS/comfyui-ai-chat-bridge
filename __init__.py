@@ -13,6 +13,7 @@ import sys
 import os
 import subprocess
 import logging
+import traceback
 
 # ── Auto-install dependencies ────────────────────────────────
 REQUIRED = ["openai>=1.0.0"]
@@ -59,11 +60,18 @@ from server import PromptServer
 from .chat_handler import ChatBridgeHandler
 
 WEB_DIRECTORY = "js"
+
+# ── These MUST be named exactly NODE_CLASS_MAPPINGS / NODE_DISPLAY_NAME_MAPPINGS ──
 NODE_CLASS_MAPPINGS = {}
 NODE_DISPLAY_NAME_MAPPINGS = {}
 
 log = logging.getLogger("ComfyUI-ChatBridge")
-handler = ChatBridgeHandler()
+
+try:
+    handler = ChatBridgeHandler()
+except Exception as e:
+    log.error(f"Failed to init ChatBridgeHandler: {e}")
+    traceback.print_exc()
 
 routes = PromptServer.instance.routes
 
@@ -124,7 +132,13 @@ async def chat_bridge_models(request: web.Request):
         return web.json_response({"models": [], "error": str(e)})
 
 
+@routes.get("/api/chat-bridge/ping")
+async def chat_bridge_ping(request: web.Request):
+    """Health check — returns instantly, zero network call."""
+    return web.json_response({"ok": True})
+
+
 log.info(
     "AI Chat Bridge plugin loaded "
-    "(routes: /api/chat-bridge/chat, /api/chat-bridge/chat/stream, /api/chat-bridge/models)"
+    "(routes: /api/chat-bridge/chat, /api/chat-bridge/chat/stream, /api/chat-bridge/models, /api/chat-bridge/ping)"
 )
